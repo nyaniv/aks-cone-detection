@@ -125,9 +125,20 @@ def main():
         return 0
 
     from ultralytics import YOLO
-    m = YOLO(args.model)
-    if args.weights:
+    if args.resume:
+        # ultralytics only resumes from a checkpoint: YOLO("x.yaml").train(resume=True)
+        # warns "not a resumable training checkpoint" and silently restarts at
+        # epoch 0 in the same run dir. So resume means: load this run's last.pt.
+        last = Path(args.project) / args.name / "weights/last.pt"
+        if not last.exists():
+            print(f"[STOP] --resume but no checkpoint at {last}")
+            return 2
+        print(f"[resume] {last}")
+        m = YOLO(str(last))
+    elif args.weights:
         m = YOLO(args.model).load(args.weights)
+    else:
+        m = YOLO(args.model)
 
     r = m.train(exist_ok=True, plots=True, val=True, resume=args.resume, **{
         k: v for k, v in cfg.items() if k not in ("model",)})
