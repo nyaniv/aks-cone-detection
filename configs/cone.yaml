@@ -1,0 +1,11 @@
+# WRITTEN BY scripts/merge.py - do not hand-edit.
+# `path` is absolute on purpose: ultralytics resolves a relative path
+# against the CWD, not against this file.
+path: /Users/nadavyaniv/aks-cone-detection/data/merged
+train: train/images
+val: val/images
+test: test/images
+
+nc: 1
+names:
+  0: cone

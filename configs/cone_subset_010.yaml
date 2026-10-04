@@ -1,0 +1,10 @@
+# WRITTEN BY scripts/make_subset.py (fraction=0.1 seed=0)
+# Identical image list to data/subset_010_coco - do not hand-edit.
+path: /Users/nadavyaniv/aks-cone-detection/data/subset_010
+train: train/images
+val: val/images
+test: test/images
+
+nc: 1
+names:
+  0: cone
