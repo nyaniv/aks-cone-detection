@@ -53,16 +53,26 @@ def predict_yolo(items, weights, imgsz, min_conf, device, batch, arch="",
                  model_config=""):
     from ultralytics import YOLO
     m = YOLO(weights)
-    paths = [str(it["img"]) for it in items]
-    for i, r in enumerate(m.predict(paths, imgsz=imgsz, conf=min_conf,
-                                    device=device, batch=batch, stream=True,
-                                    verbose=False, max_det=1000)):
-        b = r.boxes
-        if len(b):
-            items[i]["pr_boxes"] = b.xyxy.cpu().numpy().astype(np.float32)
-            items[i]["pr_conf"] = b.conf.cpu().numpy().astype(np.float32)
-        else:
-            items[i]["pr_boxes"], items[i]["pr_conf"] = EMPTY
+    # Feed ultralytics one batch at a time, never the whole list with
+    # stream=True. On MPS, with mixed source resolutions, the streamed form
+    # tripped "NMS time limit exceeded" and returned EMPTY results for 49 of
+    # 50 val images (bucketed recall 0.02 vs 0.98 chunked) - silently, since an
+    # empty result is a legal answer. Zipping each chunk with its results also
+    # makes a short result list fail loudly instead of shifting every index.
+    for s in range(0, len(items), batch):
+        chunk = items[s:s + batch]
+        rs = m.predict([str(it["img"]) for it in chunk], imgsz=imgsz,
+                       conf=min_conf, device=device, batch=batch,
+                       verbose=False, max_det=1000)
+        if len(rs) != len(chunk):
+            raise RuntimeError(f"{len(rs)} results for {len(chunk)} images")
+        for it, r in zip(chunk, rs):
+            b = r.boxes
+            if len(b):
+                it["pr_boxes"] = b.xyxy.cpu().numpy().astype(np.float32)
+                it["pr_conf"] = b.conf.cpu().numpy().astype(np.float32)
+            else:
+                it["pr_boxes"], it["pr_conf"] = EMPTY
     return items
 
 

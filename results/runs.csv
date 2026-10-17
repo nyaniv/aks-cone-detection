@@ -5,3 +5,4 @@ timestamp,run,notes,model,weights,imgsz,epochs,batch,close_mosaic,fliplr,hsv_h,h
 2026-09-20T14:19:42,m640_yolo26n_640,matched compare @640,yolo26n.pt,pretrained-default,640,5,4,10,0.5,0.0,0.7,0.4,1.0,0.5,mps,cone_subset_010.yaml,0.56613,0.31007,0.78163,0.51073,,,,,,,,,,,,,,,,
 2026-09-20T15:03:50,m640_yolo26n_640,eval val @conf0.25,,yolo26n/runs/m640_yolo26n_640/weights/best.pt,640,,,,,,,,,,cpu,,,,0.59989,0.92614,0.88889,0.92688,0.97786,0.98795,909,930,542,83,,0.25,0.5,,,,,
 2026-09-20T15:04:31,m640_rfdetrnano_640,eval val @conf0.25,,rfdetr/runs/m640_rfdetrnano_640/checkpoint_best_ema.pth,640,,,,,,,,,,mps,,,,0.57204,0.97321,0.9505,0.98065,0.99446,1.0,909,930,542,83,,0.25,0.5,,,,,
+2026-10-17T19:22:56,base_p2_1280,eval val @conf0.25,,yolo26n/runs/base_p2_1280/weights/best.pt,1280,,,,,,,,,,mps,,,,0.71096,0.9608,0.93379,0.967,0.98071,0.99338,8367,8363,4303,2719,,0.25,0.5,,,,,
