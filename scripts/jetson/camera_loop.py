@@ -15,8 +15,10 @@ and prints what the camera actually delivered.
 square 1280 eval, so the bucketed recall in results/ still applies.
 """
 import argparse
+import collections
 import statistics
 import sys
+import threading
 import time
 
 import cv2
@@ -44,6 +46,53 @@ def open_camera(dev, w, h, fps):
     return cap
 
 
+class Grabber:
+    """Reads the camera on its own thread and keeps only the newest frame.
+
+    Reading in the main loop serialises MJPG decode (~10-15 ms of CPU for
+    1080p on an Orin Nano) with inference, so decode + model overran the 33 ms
+    between frames and the loop fell to exactly half the camera rate (15 Hz
+    with a 29 ms model). Here decode overlaps inference, and a stale frame is
+    never processed when a newer one exists.
+    """
+
+    def __init__(self, cap):
+        self.cap, self.cond = cap, threading.Condition()
+        self.frame, self.t, self.idx, self.dead = None, 0.0, -1, False
+        self.times = collections.deque(maxlen=60)
+        self.th = threading.Thread(target=self._run, daemon=True)
+        self.th.start()
+
+    def _run(self):
+        while not self.dead:
+            ok, f = self.cap.read()
+            t = time.perf_counter()
+            with self.cond:
+                if not ok:
+                    self.dead = True
+                else:
+                    self.frame, self.t, self.idx = f, t, self.idx + 1
+                    self.times.append(t)
+                self.cond.notify_all()
+
+    def next(self, last_idx, timeout=2.0):
+        """Newest frame with index > last_idx -> (frame, t_captured, idx)."""
+        with self.cond:
+            self.cond.wait_for(lambda: self.idx > last_idx or self.dead, timeout)
+            if self.idx <= last_idx:
+                return None, 0.0, last_idx
+            return self.frame, self.t, self.idx
+
+    def fps(self):
+        with self.cond:
+            ts = list(self.times)
+        return (len(ts) - 1) / (ts[-1] - ts[0]) if len(ts) > 1 and ts[-1] > ts[0] else 0.0
+
+    def stop(self):
+        self.dead = True
+        self.th.join(timeout=1.0)
+
+
 def pct(xs, p):
     xs = sorted(xs)
     return xs[min(len(xs) - 1, int(round(p / 100 * (len(xs) - 1))))]
@@ -66,30 +115,33 @@ def main():
     from ultralytics import YOLO
     model = YOLO(args.model, task="detect")
     cap = open_camera(args.cam, args.width, args.height, args.fps)
+    grab = Grabber(cap)
 
     # warm-up: the first TensorRT calls allocate and are not representative
-    ok, frame = cap.read()
-    if not ok:
+    frame, _, _ = grab.next(-1)
+    if frame is None:
         sys.exit("camera returned no frame")
     for _ in range(5):
         model.predict(frame, imgsz=args.imgsz, conf=args.conf, verbose=False)
 
-    model_ms, loop_ms, wait_ms, counts = [], [], [], []
-    t_start = t_prev = time.perf_counter()
-    t_print = t_start
+    model_ms, loop_ms, age_ms, counts = [], [], [], []
+    last_idx, skipped = -1, 0
+    t_start = t_prev = t_print = time.perf_counter()
     try:
         while True:
-            t0 = time.perf_counter()
-            ok, frame = cap.read()          # blocks until the camera has a frame
-            t1 = time.perf_counter()
-            if not ok:
+            frame, t_cap, idx = grab.next(last_idx)   # newest frame we haven't used
+            if frame is None:
                 print("camera stopped delivering frames")
                 break
+            if last_idx >= 0:
+                skipped += idx - last_idx - 1          # frames the model was too slow for
+            last_idx = idx
+            t1 = time.perf_counter()
             r = model.predict(frame, imgsz=args.imgsz, conf=args.conf, verbose=False)[0]
             t2 = time.perf_counter()
 
-            wait_ms.append((t1 - t0) * 1e3)
             model_ms.append((t2 - t1) * 1e3)    # pre + inference + post, as bench_latency.py
+            age_ms.append((t2 - t_cap) * 1e3)   # frame arrived -> boxes ready
             loop_ms.append((t2 - t_prev) * 1e3)
             counts.append(len(r.boxes))
             t_prev = t2
@@ -105,28 +157,33 @@ def main():
 
             if t2 - t_print >= 1.0:
                 n = min(len(loop_ms), 30)
-                print(f"{1e3 / statistics.mean(loop_ms[-n:]):5.1f} Hz | model "
-                      f"{statistics.median(model_ms[-n:]):5.1f} ms | waiting for camera "
-                      f"{statistics.median(wait_ms[-n:]):5.1f} ms | cones {counts[-1]}")
+                print(f"{1e3 / statistics.mean(loop_ms[-n:]):5.1f} Hz | camera "
+                      f"{grab.fps():4.1f} fps | model {statistics.median(model_ms[-n:]):5.1f} ms | "
+                      f"frame->boxes {statistics.median(age_ms[-n:]):5.1f} ms | cones {counts[-1]}")
                 t_print = t2
             if args.seconds and t2 - t_start >= args.seconds:
                 break
     except KeyboardInterrupt:
         pass
     finally:
+        grab.stop()
         cap.release()
         if args.show:
             cv2.destroyAllWindows()
 
     if len(model_ms) > 1:
+        cam = grab.fps()
         print("\n--- summary ---")
-        print(f"frames        : {len(model_ms)}")
-        print(f"loop rate     : {1e3 / statistics.mean(loop_ms[1:]):.1f} Hz (camera-capped at {args.fps})")
+        print(f"frames        : {len(model_ms)} processed, {skipped} camera frames skipped")
+        print(f"camera        : {cam:.1f} fps delivered (asked for {args.fps})"
+              + ("  <- camera is slowing itself down, likely low light / auto-exposure"
+                 if cam < 0.8 * args.fps else ""))
+        print(f"loop rate     : {1e3 / statistics.mean(loop_ms[1:]):.1f} Hz")
         print(f"model / frame : median {statistics.median(model_ms):.1f} ms, "
               f"p95 {pct(model_ms, 95):.1f} ms  ->  model alone could do "
               f"{1e3 / statistics.median(model_ms):.0f} Hz")
+        print(f"frame->boxes  : median {statistics.median(age_ms):.1f} ms, p95 {pct(age_ms, 95):.1f} ms")
         print(f"cones / frame : median {statistics.median(counts):.0f}")
-
 
 if __name__ == "__main__":
     main()
