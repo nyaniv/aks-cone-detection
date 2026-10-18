@@ -14,7 +14,7 @@ v4l2-ctl --list-devices            # find the Brio's /dev/videoN
 git clone https://github.com/nyaniv/aks-cone-detection.git && cd aks-cone-detection
 ```
 
-The repo is private, so cloning asks for GitHub credentials (see below).
+The repo is public, so cloning needs no GitHub login.
 
 ## Every time
 
@@ -33,23 +33,3 @@ reports anything smaller, distant cones will be missed. Check the modes with
 
 The loop is capped at 30 Hz by the camera. The summary's "model alone could
 do N Hz" line is the detector's own speed.
-
-## Pulling a private repo on a shared Jetson
-
-Don't log your personal GitHub account in on a lab machine. Use a read-only
-deploy key, which only gives access to this one repo:
-
-```bash
-# on the Jetson
-ssh-keygen -t ed25519 -f ~/.ssh/aks_deploy -N "" -C "jetson aks-cone-detection"
-cat ~/.ssh/aks_deploy.pub
-```
-
-Add that key under the repo's Settings > Deploy keys (leave write access off),
-then clone over SSH:
-
-```bash
-GIT_SSH_COMMAND="ssh -i ~/.ssh/aks_deploy" \
-  git clone git@github.com:nyaniv/aks-cone-detection.git
-cd aks-cone-detection && git config core.sshCommand "ssh -i ~/.ssh/aks_deploy"
-```
