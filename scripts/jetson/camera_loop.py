@@ -17,6 +17,7 @@ square 1280 eval, so the bucketed recall in results/ still applies.
 """
 import argparse
 import collections
+import os
 import statistics
 import sys
 import threading
@@ -132,6 +133,11 @@ def main():
 
     writer, save_size = None, (frame.shape[1] // 2, frame.shape[0] // 2)
     if args.save:
+        args.save = os.path.abspath(args.save)
+        if os.path.isdir("/cone") and not args.save.startswith("/cone/"):
+            # only /cone is shared with the Jetson; anything else vanishes with the container
+            print(f"[warn] {args.save} is inside the container only - it is NOT visible on the "
+                  f"Jetson and is deleted when the container exits. Use --save /cone/run.mp4")
         writer = cv2.VideoWriter(args.save, cv2.VideoWriter_fourcc(*"mp4v"), args.fps, save_size)
         if not writer.isOpened():
             sys.exit(f"could not open {args.save} for writing")
@@ -175,7 +181,9 @@ def main():
                     except cv2.error:
                         # opencv-python-headless: no window support at all
                         print("[warn] this OpenCV cannot open windows (headless build) - "
-                              "continuing without --show. Use --save FILE.mp4 to see the boxes.")
+                              "continuing without --show. To see the boxes, record a video:\n"
+                              "       python3 /cone/scripts/jetson/camera_loop.py "
+                              "--save /cone/run.mp4 --seconds 20")
                         args.show = False
 
             if t2 - t_print >= 1.0:
@@ -193,7 +201,9 @@ def main():
         cap.release()
         if writer is not None:
             writer.release()
-            print(f"\nvideo saved: {args.save}")
+            shown = ("~/aks-cone-detection/" + args.save[len("/cone/"):]
+                     if args.save.startswith("/cone/") else args.save)
+            print(f"\nvideo saved: {args.save}  (on the Jetson: {shown})")
         if args.show:
             try:
                 cv2.destroyAllWindows()
