@@ -24,7 +24,7 @@ bash scripts/jetson/run_container.sh                       # host -> container s
 # inside the container:
 bash /cone/scripts/jetson/export_engine.sh                 # first time / new model only
 python3 /cone/scripts/jetson/camera_loop.py --seconds 30   # time it
-python3 /cone/scripts/jetson/camera_loop.py --show         # watch it; q quits
+python3 /cone/scripts/jetson/camera_loop.py --save /cone/run.mp4 --seconds 20   # boxes -> ~/aks-cone-detection/run.mp4
 ```
 
 `camera_loop.py` should report `camera: 1920x1080 @ 30 fps, MJPG`. If it

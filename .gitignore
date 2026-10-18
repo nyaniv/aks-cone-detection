@@ -35,3 +35,6 @@ viz/
 # the one deployable model, so the Jetson can `git pull` it (6 MB).
 # Engines stay ignored: they only run on the device that built them.
 !models/*.pt
+
+# camera_loop.py --save output
+*.mp4

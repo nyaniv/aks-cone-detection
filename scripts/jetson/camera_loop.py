@@ -2,7 +2,8 @@
 """Live cone detection from a USB webcam on the Jetson, with honest timing.
 
     # inside the Ultralytics JetPack 6 container (see run_container.sh)
-    python3 /cone/scripts/jetson/camera_loop.py --show              # boxes on screen
+    python3 /cone/scripts/jetson/camera_loop.py --save /cone/run.mp4 --seconds 20   # boxes, to a video
+    python3 /cone/scripts/jetson/camera_loop.py --show              # boxes on screen (needs GUI OpenCV)
     python3 /cone/scripts/jetson/camera_loop.py --seconds 30        # headless: time it, then summarise
 
 Why not `yolo predict source=0`: that opens the camera at OpenCV's default,
@@ -108,7 +109,12 @@ def main():
     ap.add_argument("--imgsz", type=int, nargs=2, default=[736, 1280],
                     metavar=("H", "W"), help="must match the engine")
     ap.add_argument("--conf", type=float, default=0.25)
-    ap.add_argument("--show", action="store_true", help="draw boxes in a window")
+    ap.add_argument("--show", action="store_true",
+                    help="draw boxes in a window - the Ultralytics container's OpenCV is headless, "
+                         "so this usually needs --save instead")
+    ap.add_argument("--save", default="", metavar="FILE.mp4",
+                    help="write the frames with boxes to a video (half size). Costs CPU, so time "
+                         "without it")
     ap.add_argument("--seconds", type=float, default=0, help="stop after N s (0 = until q / Ctrl+C)")
     args = ap.parse_args()
 
@@ -123,6 +129,14 @@ def main():
         sys.exit("camera returned no frame")
     for _ in range(5):
         model.predict(frame, imgsz=args.imgsz, conf=args.conf, verbose=False)
+
+    writer, save_size = None, (frame.shape[1] // 2, frame.shape[0] // 2)
+    if args.save:
+        writer = cv2.VideoWriter(args.save, cv2.VideoWriter_fourcc(*"mp4v"), args.fps, save_size)
+        if not writer.isOpened():
+            sys.exit(f"could not open {args.save} for writing")
+        print(f"saving boxes to {args.save} at {save_size[0]}x{save_size[1]} "
+              f"(timing numbers are lower while saving)")
 
     model_ms, loop_ms, age_ms, counts = [], [], [], []
     last_idx, skipped = -1, 0
@@ -146,14 +160,23 @@ def main():
             counts.append(len(r.boxes))
             t_prev = t2
 
-            if args.show:
+            if args.show or writer is not None:
                 img = r.plot(line_width=2)
                 hz = 1e3 / statistics.mean(loop_ms[-30:])
                 cv2.putText(img, f"{hz:4.1f} Hz  model {model_ms[-1]:4.1f} ms  cones {counts[-1]}",
                             (16, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                cv2.imshow("cones", img)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if writer is not None:
+                    writer.write(cv2.resize(img, save_size))
+                if args.show:
+                    try:
+                        cv2.imshow("cones", img)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            break
+                    except cv2.error:
+                        # opencv-python-headless: no window support at all
+                        print("[warn] this OpenCV cannot open windows (headless build) - "
+                              "continuing without --show. Use --save FILE.mp4 to see the boxes.")
+                        args.show = False
 
             if t2 - t_print >= 1.0:
                 n = min(len(loop_ms), 30)
@@ -168,8 +191,14 @@ def main():
     finally:
         grab.stop()
         cap.release()
+        if writer is not None:
+            writer.release()
+            print(f"\nvideo saved: {args.save}")
         if args.show:
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                pass
 
     if len(model_ms) > 1:
         cam = grab.fps()
