@@ -1,0 +1,55 @@
+# Running the cone detector on the Jetson
+
+Target: Jetson Orin Nano Super (JetPack 6), Logitech Brio 105 webcam.
+The model to deploy is `models/base_p2_1280.pt` (tracked in git, 6 MB).
+
+## Once per Jetson
+
+```bash
+cat /etc/nv_tegra_release          # want R36.4+ (JetPack 6.2) for the Super power modes
+sudo nvpmodel -q --verbose         # pick MAXN SUPER: sudo nvpmodel -m <N>
+sudo jetson_clocks
+sudo apt install -y v4l-utils
+v4l2-ctl --list-devices            # find the Brio's /dev/videoN
+git clone https://github.com/nyaniv/aks-cone-detection.git && cd aks-cone-detection
+```
+
+The repo is private, so cloning asks for GitHub credentials (see below).
+
+## Every time
+
+```bash
+cd aks-cone-detection && git pull
+bash scripts/jetson/run_container.sh                       # host -> container shell
+# inside the container:
+bash /cone/scripts/jetson/export_engine.sh                 # first time / new model only
+python3 /cone/scripts/jetson/camera_loop.py --seconds 30   # time it
+python3 /cone/scripts/jetson/camera_loop.py --show         # watch it; q quits
+```
+
+`camera_loop.py` should report `camera: 1920x1080 @ 30 fps, MJPG`. If it
+reports anything smaller, distant cones will be missed. Check the modes with
+`v4l2-ctl -d /dev/video0 --list-formats-ext`.
+
+The loop is capped at 30 Hz by the camera. The summary's "model alone could
+do N Hz" line is the detector's own speed.
+
+## Pulling a private repo on a shared Jetson
+
+Don't log your personal GitHub account in on a lab machine. Use a read-only
+deploy key, which only gives access to this one repo:
+
+```bash
+# on the Jetson
+ssh-keygen -t ed25519 -f ~/.ssh/aks_deploy -N "" -C "jetson aks-cone-detection"
+cat ~/.ssh/aks_deploy.pub
+```
+
+Add that key under the repo's Settings > Deploy keys (leave write access off),
+then clone over SSH:
+
+```bash
+GIT_SSH_COMMAND="ssh -i ~/.ssh/aks_deploy" \
+  git clone git@github.com:nyaniv/aks-cone-detection.git
+cd aks-cone-detection && git config core.sshCommand "ssh -i ~/.ssh/aks_deploy"
+```
