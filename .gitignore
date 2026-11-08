@@ -38,3 +38,9 @@ viz/
 
 # camera_loop.py --save output
 *.mp4
+
+# generated per machine by merge.py / make_subset.py (absolute paths)
+configs/cone.yaml
+configs/cone_subset_*.yaml
+configs/*.colab.yaml
+configs/*.cluster.yaml

@@ -67,6 +67,8 @@ def main():
     def yamls():
         out = []
         for y in sorted((ROOT / "configs").glob("*.yaml")):
+            if y.name.endswith(".example.yaml"):
+                continue  # a template with a placeholder path, not a real config
             txt = y.read_text()
             m = re.search(r"^path:\s*(.+)$", txt, re.M)
             assert m, f"{y.name} has no path:"
@@ -141,8 +143,7 @@ def main():
     sec("4. eval instrument")
 
     def selftest():
-        py = "/opt/homebrew/Caskroom/miniforge/base/envs/cone/bin/python"
-        r = subprocess.run([py, str(ROOT / "scripts/eval_buckets.py"), "--self-test"],
+        r = subprocess.run([sys.executable, str(ROOT / "scripts/eval_buckets.py"), "--self-test"],
                            capture_output=True, text=True)
         assert "ALL SELF-TESTS PASSED" in r.stdout, "self-tests did not pass"
         return f"{r.stdout.count('PASS')} assertions"

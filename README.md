@@ -7,9 +7,10 @@ boundary markers. That is the one assumption that shapes everything else:
 a cone is an object to avoid, its color carries no meaning, and the cone that
 matters most is the small, far-away one we have not reached yet.
 
-- **Framework:** Ultralytics YOLO26n (fallback YOLO11n if JetPack dependency issues)
-- **Target:** Jetson, TensorRT engine
+- **Model:** Ultralytics YOLO26n with a P2 head, at imgsz 1280
+- **Target:** Jetson Orin Nano Super, TensorRT FP16 engine
 - **Classes:** one — `cone`. No color distinction.
+- **Deployable model:** `models/base_p2_1280.pt` (6 MB, tracked in git)
 
 ## What we optimize
 
@@ -18,10 +19,40 @@ a false positive is a downstream problem we filter temporally. Overall mAP is
 dominated by big near cones that were never in danger of being missed, so it is
 logged for context and otherwise ignored.
 
-Buckets: `<10px`, `10–25px`, `25–60px`, `>60px`.
+Buckets: `10-16` · `16-32` · `32-64` · `>=64` px, post-letterbox (see Eval).
 
 Corollary: we do **not** buy precision with a high confidence threshold.
 False positives get handled by temporal filtering in the planner, not here.
+
+## Results
+
+`models/base_p2_1280.pt`: yolo26n-p2, imgsz 1280, 50 epochs from COCO-pretrained
+`yolo26n.pt`, trained on a Colab T4. Validation set: 1,775 FSOCO images from
+two teams (`bme`, `ff`) never seen in training. IoU 0.5.
+
+| conf | 10-16 px | 16-32 px | 32-64 px | >=64 px | precision | false positives |
+|---|---|---|---|---|---|---|
+| 0.05 | 0.961 | 0.979 | 0.986 | 0.996 | 0.393 | 35,848 |
+| 0.10 | 0.953 | 0.976 | 0.986 | 0.995 | 0.502 | 22,874 |
+| **0.25** | **0.934** | **0.967** | **0.981** | **0.993** | 0.711 | 9,278 |
+| 0.50 | 0.869 | 0.938 | 0.963 | 0.989 | 0.896 | 2,555 |
+
+Source: `results/buckets_base_p2_1280_val.csv`; the 0.25 row is in
+`results/runs.csv`. A further 10,736 val boxes (31%) are under 10 px and are
+not scored. The test split (`ka`, `mms`) is still untouched.
+
+**Speed.** On the Jetson Orin Nano Super (MAXN_SUPER, 736x1280 FP16 engine),
+the model takes **29.2 ms median / 32.4 ms p95 per frame** (pre + inference +
+post), about 34 Hz. With the 30 fps Brio 105 webcam, the live loop is capped
+by the camera. On a Mac M4 (MPS, PyTorch) it is 24.2 ms median / 39.8 ms p95
+(`results/latency.csv`).
+
+**Live check, indoors (Brio 105, close range).** Cones 1–3 m away are boxed at
+conf 0.75–0.90 and stay boxed through motion blur and hand occlusion. No false
+positives on shoes, chairs, a backpack or an orange keychain. Weak spots:
+stacked or nested cones get one box for the stack plus partial boxes inside it
+(conf 0.3–0.6), and in a tight line of cones the ones hidden behind come out
+at conf 0.3–0.4. Range against distant cones has not been tested live yet.
 
 ## Tasks
 
@@ -31,23 +62,26 @@ False positives get handled by temporal filtering in the planner, not here.
 | 1 | Inventory both datasets | `scripts/inventory.py`, `scripts/fsoco_to_yolo.py` | **done** — see `notes/findings.md` |
 | 2 | Inspect the AKS `1` class | — | **done — it is real cones, merge it** |
 | 3 | Merge: collapse to 1 class, phash dedupe, split by prefix | `scripts/merge.py` | **done** — 13,847 imgs / 227,317 boxes |
-| 4 | Baseline: **yolo26n-p2 @ 1280**, 100 epochs, close_mosaic 10 | `scripts/train.py` | script ready — **needs a CUDA box** |
-| 5 | Eval: recall by bbox-height bucket | `scripts/eval_buckets.py` | **script ready + self-tested** |
-| 6 | Export TensorRT, benchmark **end-to-end** latency on Jetson | `scripts/export_trt.py` | after 5 |
-| 7 | Quantify loss at 640 / 960 vs the 1280 baseline | `scripts/sweep.py` | after 6 |
-
-Scripts for tasks 2–7 are written once the previous task tells us what the data
-actually looks like — guessing at a merge before seeing the class histogram is
-how you silently drop half a dataset.
+| 4 | Baseline: **yolo26n-p2 @ 1280**, close_mosaic 10 | `scripts/train.py` | **done** — 50 epochs, Colab T4 |
+| 5 | Eval: recall by bbox-height bucket | `scripts/eval_buckets.py` | **done** — see Results |
+| 6 | TensorRT on the Jetson, end-to-end latency, live camera | `scripts/jetson/` | **running** — 29 ms/frame; distant-cone range test pending |
+| 7 | Quantify loss at 640 / 960 vs the 1280 baseline | `scripts/train.py --imgsz` | not started |
 
 ## Datasets
 
-Drop the downloads in place, **in YOLO format**:
+The images are **not in this repo** (24 GB raw). Put them in place, then
+convert and merge:
 
 ```
-data/raw/fsoco/     # FSOCO — 5 classes, all collapse to `cone`
-data/raw/aks/       # AKS cone set (Roboflow Universe) — 2 classes: `cone` + junk class `1`
-data/merged/        # written by scripts/merge.py — never edit by hand
+~/fsoco_raw/        # FSOCO bounding boxes, Supervisely format (41 team folders + meta.json)
+data/raw/aks/       # AKS cone set, Roboflow YOLOv11 export - 2 classes, both real cones
+data/interim/fsoco/ # written by scripts/fsoco_to_yolo.py
+data/merged/        # written by scripts/merge.py - never edit by hand
+```
+
+```bash
+python scripts/fsoco_to_yolo.py ~/fsoco_raw -o data/interim/fsoco
+python scripts/merge.py          # also writes configs/cone.yaml for this machine
 ```
 
 **Overlap is much bigger than expected:** 2,997 AKS images (56.5%) stem-match an
@@ -68,27 +102,21 @@ Folder `prom` holds all 98 issue-tagged images → train only, never val/test.
 
 ## Setup
 
-**Already done.** The `cone` env exists and is verified:
-
 ```bash
-conda activate cone
-python scripts/env_check.py      # verifies the whole stack in one shot
+conda create -n cone python=3.11 && conda activate cone
+pip install torch torchvision          # CUDA build on a GPU box; default wheel on a Mac
+pip install -r requirements.txt
+python scripts/eval_buckets.py --self-test   # no data needed
+python scripts/env_check.py                  # needs the datasets in place
 ```
 
-| | |
-|---|---|
-| env | `cone` — Python 3.11.16 (base miniforge is 3.14, which has no torch/ultralytics wheels) |
-| torch | 2.14.0, **MPS** on the M4 |
-| ultralytics | 8.4.155 |
-| weights | `weights/yolo26n.pt`, `weights/yolo11n.pt` — cached locally |
+Use Python 3.11: newer interpreters (3.14) have no torch/ultralytics wheels yet.
+The author's Mac runs torch 2.14.0 (MPS) and ultralytics 8.4.155; the baseline
+was trained on 8.4.177. RF-DETR and DEIMv2 each pin their own torch, so they get
+separate envs: `scripts/setup_rfdetr_env.sh`, `scripts/setup_deimv2_env.sh`.
 
-`yolo26n` resolves and loads (2.57M params), so the YOLO11n fallback is
-insurance, not the plan. `yolo26n-p2.yaml` builds too (2.66M params), so the
-`n-p2@960` sweep entry is good.
-
-Verified end-to-end on a synthetic cone set: **train → val → ONNX export** all
-run clean on MPS. Task 1 itself needs none of this — `inventory.py` is
-stdlib-only.
+Just running the model on the Jetson needs none of this: see
+[`scripts/jetson/README.md`](scripts/jetson/README.md).
 
 ## imgsz — decided from the data, not a sweep
 
@@ -147,25 +175,60 @@ on a cluster.
 # see the resolved config without training
 python scripts/train.py --dry-run
 
-# the baseline, on a cluster GPU
-python scripts/train.py --device 0 --batch -1 --name base_p2_1280
+# the baseline as it was run (Colab T4, 50 epochs)
+python scripts/train.py --weights yolo26n.pt --device 0 --batch 8 --workers 2 \
+    --epochs 50 --name base_p2_1280
 
-# multi-GPU
-python scripts/train.py --device 0,1,2,3 --batch 32 --name base_p2_1280
+# after a disconnect or walltime kill: the same command plus --resume
+python scripts/train.py ... --resume
 
 # quick plumbing check anywhere
 python scripts/train.py --model yolo26n.pt --imgsz 640 --batch 8 \
     --epochs 1 --fraction 0.02 --name smoke
 ```
 
+**Always pass `--weights yolo26n.pt`.** The default `--model` is a `.yaml`,
+which is only an architecture: without `--weights` the network starts from
+random weights. With it, the COCO weights load into every layer that fits
+(the P2 head's extra layers start fresh).
+
+`--resume` loads `<project>/<name>/weights/last.pt`. Ultralytics only resumes
+from a checkpoint; `--resume` on a `.yaml` silently restarts at epoch 0.
+
 Defaults are the decided policy: `yolo26n-p2.yaml`, `imgsz 1280`,
 `close_mosaic 10`, `fliplr 0.5`, `hsv_h 0.0`. `--device auto` resolves
-cuda > mps > cpu; `--batch -1` is AutoBatch and falls back to 4 off CUDA.
+cuda > mps > cpu. On a T4, AutoBatch (`--batch -1`) picks 2, which is too
+small; batch 8 fits in about 10 GB. Runs land in `yolo26n/runs/<name>/`.
 The script refuses to start a P2 run at imgsz≥1280 on MPS rather than let you
 discover the negative result again.
 
 Queued experiments have flags already: `--min-box-px` (in `merge.py`) and
 `--rect`.
+
+### Training on Colab
+
+A free T4 does about 14 min per epoch at 1280 (CPU-bound on 2 cores), so
+50 epochs is about 11 h across 2–3 sessions. Pack the merged set once with
+`COPYFILE_DISABLE=1 tar --no-xattrs -cf cone_merged.tar -C data merged`
+(otherwise macOS adds a `._*` junk file next to every image), upload it and a
+zip of the repo to Drive, then:
+
+```python
+from google.colab import drive; drive.mount('/content/drive')
+D = '/content/drive/MyDrive/aks-cone'
+!mkdir -p /content/data && tar -xf {D}/cone_merged.tar -C /content/data 2>/dev/null; find /content/data/merged -name '._*' -delete
+!cd /content && unzip -qo {D}/cone_code.zip -d aks && pip -q install ultralytics
+open('/content/aks/configs/cone.colab.yaml','w').write(
+"path: /content/data/merged\ntrain: train/images\nval: val/images\ntest: test/images\nnc: 1\nnames:\n  0: cone\n")
+!cd /content/aks && python scripts/train.py --data configs/cone.colab.yaml --weights yolo26n.pt \
+   --device 0 --batch 8 --workers 2 --epochs 50 --name base_p2_1280 --project {D}/runs
+```
+
+Extract to `/content`, not Drive: reading thousands of small files from Drive
+is slow. Checkpoints go to Drive (`--project`), so after a disconnect, rerun
+the cells with `--resume` added.
+
+SLURM jobs for Purdue RCAC clusters are in `scripts/slurm/`.
 
 ## Eval
 
@@ -173,7 +236,7 @@ Queued experiments have flags already: `--min-box-px` (in `merge.py`) and
 decides things. Overall mAP is logged for context and otherwise ignored.
 
 ```bash
-python scripts/eval_buckets.py --weights runs/base_p2_1280/weights/best.pt
+python scripts/eval_buckets.py --weights models/base_p2_1280.pt --run base_p2_1280
 python scripts/eval_buckets.py --weights ... --conf 0.05,0.1,0.25,0.5 --split test
 python scripts/eval_buckets.py --self-test        # no model, no data needed
 ```
@@ -208,6 +271,7 @@ Every run appends config + bucketed recall to `results/runs.csv`
 ## Training defaults
 
 - `model=yolo26n-p2.yaml`, `imgsz=1280` — see the imgsz section above
+- start from `--weights yolo26n.pt` (COCO-pretrained)
 - keep `fliplr` — a cone is symmetric, the flip is free data
 - `hsv_h` ≈ 0 — cone hue is the signal; do not rotate it away
 - `close_mosaic 10`

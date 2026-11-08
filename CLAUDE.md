@@ -51,12 +51,13 @@ of scope for now.
 | 1 | inventory both sets | **done** — `notes/findings.md` |
 | 2 | inspect AKS class `1` | **done** — it is real cones, merged |
 | 3 | merge / dedupe / split | **done** — `data/merged`, 13,847 imgs / 227,317 boxes |
-| 4 | baseline train | script ready, **needs a CUDA box** — will not run on this Mac |
-| 5 | bucketed-recall eval | script ready, **9/9 self-tests pass**, untested against a real trained model |
-| 6 | TensorRT export + e2e Jetson latency | not started |
+| 4 | baseline train | **done** — 50 epochs on Colab T4 from `yolo26n.pt`; `models/base_p2_1280.pt` |
+| 5 | bucketed-recall eval | **done** — val recall @0.25: 0.934 / 0.967 / 0.981 / 0.993, precision 0.711 |
+| 6 | TensorRT export + e2e Jetson latency | **running** — `scripts/jetson/`; Orin Nano Super 29.2 ms median / 32.4 p95; distant-cone range test pending |
 | 7 | quantify 640/960 loss vs 1280 | not started |
 
-Nothing is committed to git yet — the repo is initialized, all files untracked.
+Code lives at github.com/nyaniv/aks-cone-detection (public). Datasets, runs and
+engines are gitignored; `configs/cone.yaml` is generated per machine by `merge.py`.
 
 ## Decisions already made (do not relitigate)
 
@@ -120,7 +121,7 @@ Nothing is committed to git yet — the repo is initialized, all files untracked
 
 | script | what |
 |---|---|
-| `env_check.py` | 10-point readiness check; run it first after any env change |
+| `env_check.py` | 11-point readiness check; run it first after any env change |
 | `imgmeta.py` | stdlib-only image-header dims, so task 1 never blocks on deps |
 | `inventory.py` | counts, class names, dims, bbox-height histogram (stdlib only) |
 | `fsoco_to_yolo.py` | Supervisely → YOLO, rectangles only, downscale, writes `manifest.csv` |
@@ -136,6 +137,7 @@ Nothing is committed to git yet — the repo is initialized, all files untracked
 | `deimv2_cfg.py` | builds that config by overriding an upstream DEIMv2 one |
 | `predict.py` | GT + predictions drawn for any backend, same frames per `--seed` |
 | `compare.py` | matched-protocol yolo26n vs rf-detr |
+| `jetson/` | on the Jetson: `run_container.sh` (host), `export_engine.sh` (TRT FP16 736x1280), `camera_loop.py` (threaded Brio capture, `--save` video) |
 
 Three conda envs, on purpose - each model pins its own torch. `cone` is the one
 `env_check.py` validates; `rfdetr` and `deimv2` are set up by
@@ -162,6 +164,11 @@ Share of the val set that is even scorable: **34.7% @640 · 52.9% @960 ·
 
 ## Next step
 
-Get `scripts/train.py` onto a CUDA box and run the baseline:
-`--device 0 --batch -1 --name base_p2_1280`. Then `eval_buckets.py` against
-`best.pt` — that is the first row of `results/runs.csv` that means anything.
+1. Range test on the Jetson: cones at 5 / 10 / 15 / 20 m outdoors, with
+   `scripts/jetson/camera_loop.py --save`. Everything tested live so far was
+   1-3 m away, which says nothing about the small-cone objective.
+2. Confirm the live loop reaches ~30 Hz with the threaded grabber. Every saved
+   video shows 15 Hz; the timing summary prints the camera's delivered fps,
+   which tells camera auto-exposure apart from a slow loop.
+3. Task 7: retrain at `--imgsz 960` and `640` to measure what they cost.
+4. Test split (`ka`, `mms`) only for the final model comparison.

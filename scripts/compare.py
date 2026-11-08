@@ -24,12 +24,29 @@ What is NOT equal, and cannot be: optimizer/schedule defaults and pretraining
 corpora differ per family. Anyone reading the table should know that.
 """
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CONDA = Path("/opt/homebrew/Caskroom/miniforge/base/envs")
+def _conda_envs():
+    """$CONDA_ENVS, else the envs/ dir this interpreter lives in
+    (<base>/envs/cone/bin/python -> <base>/envs), else `conda info --base`."""
+    if os.environ.get("CONDA_ENVS"):
+        return Path(os.environ["CONDA_ENVS"])
+    here = Path(sys.executable).resolve()
+    if here.parent.parent.parent.name == "envs":
+        return here.parent.parent.parent
+    try:
+        base = subprocess.run(["conda", "info", "--base"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+        return Path(base) / "envs"
+    except (OSError, subprocess.CalledProcessError):
+        return Path("envs")
+
+
+CONDA = _conda_envs()
 DEFAULT_CONF = "0.05,0.10,0.25,0.50"
 
 

@@ -6,7 +6,8 @@
 #   bash scripts/setup_rfdetr_env.sh
 set -euo pipefail
 
-CONDA_BASE="${CONDA_BASE:-/opt/homebrew/Caskroom/miniforge/base}"
+CONDA_BASE="${CONDA_BASE:-$(conda info --base 2>/dev/null)}"
+[[ -n "$CONDA_BASE" ]] || { echo "conda not found - install miniforge or set CONDA_BASE" >&2; exit 1; }
 ENV_NAME="${ENV_NAME:-rfdetr}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
